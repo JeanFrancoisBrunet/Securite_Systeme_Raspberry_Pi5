@@ -42,7 +42,16 @@ Console de sécurité Tkinter centralisant, pour un Raspberry Pi 5, le pilotage 
 - Tableau de bord temps réel (rafraîchi toutes les 2 secondes) : CPU, RAM, **température** (seuils orange/rouge configurables), uptime, charge système (load average 1/5/15 min).
 - **Top 10 processus** par consommation CPU.
 - Informations système (`uname`, `lsb_release`, `hostnamectl`, `lscpu`, `free`), disque (`df`, `lsblk`) et réseau (`ip addr`).
-- **Nettoyage système** en un clic : `apt autoremove --purge`, `apt autoclean`, `apt clean`, purge de `/tmp` et `/var/tmp`.
+- **Analyse d'espace disque** façon `ncdu` : classement des dossiers les plus volumineux (`du -x`, profondeur et nombre de résultats configurables), limité au système de fichiers courant. Rappel intégré vers `sudo ncdu -x /` pour une exploration interactive complète.
+- **Nettoyage système** avec sélection des éléments à traiter (cases à cocher) :
+  - Paquets APT obsolètes (`autoremove --purge`, `autoclean`, `clean`)
+  - Fichiers temporaires (`/tmp`, `/var/tmp`)
+  - Journaux systemd, avec durée de rétention réglable (`journalctl --vacuum-time`)
+  - Cache pip (`~/.cache/pip`)
+  - Cache miniatures (`~/.cache/thumbnails`)
+  - Docker : images/conteneurs/volumes inutilisés (`docker system prune`), case affichée uniquement si Docker est installé
+  - Un **aperçu** (`apt-get --dry-run autoremove` + `journalctl --disk-usage`) est affiché avant toute confirmation.
+  - À l'issue du nettoyage, un **bilan d'espace disque libéré** (avant/après, en Mo/Go) est affiché en plus du détail de chaque commande.
 
 ## Fonctionnalités transverses
 - Chaque onglet dispose de sa propre console de sortie (horodatée, ✅/❌ selon succès), avec boutons **Effacer** et **Copier tout**.
@@ -68,6 +77,8 @@ pip install pillow psutil --break-system-packages
 ```
 
 > `psutil` est requis pour l'onglet Monitoring — sans lui, l'onglet affiche une invite d'installation et se désactive.
+
+> `ncdu` est optionnel : l'onglet Monitoring y fait référence comme complément pour l'exploration interactive de l'espace disque, mais n'en dépend pas (`sudo apt install ncdu`).
 
 ## ⚠️ Avertissement
 Les onglets **Hydra** et **Nmap** intègrent des outils d'audit de sécurité offensifs. Leur usage n'est légal que sur des systèmes dont on est propriétaire ou pour lesquels on dispose d'une autorisation explicite. L'application affiche cet avertissement directement dans l'onglet Audit.

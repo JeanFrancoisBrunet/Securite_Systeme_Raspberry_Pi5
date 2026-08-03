@@ -17,6 +17,7 @@
 import os
 import re
 import time
+import shutil
 import threading
 import subprocess
 from datetime import datetime
@@ -44,6 +45,15 @@ ICON_SIZE_DEFAULT   = (120, 120)  	# taille par défaut des icônes d'onglet (px
 # ---- Monitoring -------------------------------------------------------------
 MONITORING_INTERVAL_MS = 2000   # intervalle de rafraîchissement monitoring (ms)
 MONITORING_TOP_N       = 10     # nombre de processus affichés dans le top
+
+# ---- Analyse d'espace disque (façon ncdu) ------------------------------------
+DISK_ANALYZE_ROOT     = "/"     # point de départ de l'analyse
+DISK_ANALYZE_DEPTH    = 3       # profondeur de parcours (du -d)
+DISK_ANALYZE_TOP_N    = 25      # nombre de dossiers affichés dans le classement
+DISK_ANALYZE_EXCLUDE  = ["/proc", "/sys", "/dev", "/run", "/mnt", "/media"]
+
+# ---- Nettoyage système : journaux -------------------------------------------
+JOURNALCTL_VACUUM_DEFAULT = "7d"   # ancienneté conservée par défaut pour les logs systemd
 
 # ---- Température (°C) -------------------------------------------------------
 TEMP_WARN_THRESHOLD = 65   # seuil orange
@@ -1850,6 +1860,9 @@ class SecurityGUI:
         ttk.Button(frame_btns, text="📋 Interfaces réseau",
                    command=self._mon_network).pack(side="left", padx=8, pady=6)
         ttk.Separator(frame_btns, orient="vertical").pack(side="left", fill="y", padx=10, pady=4)
+        ttk.Button(frame_btns, text="🔍 Analyser l'espace disque",
+                   command=self._mon_disk_analyze, style="Info.TButton"
+                   ).pack(side="left", padx=8, pady=6)
         ttk.Button(frame_btns, text="🗑 Nettoyer Système",
                    command=self._mon_clean, style="Danger.TButton"
                    ).pack(side="left", padx=8, pady=6)
@@ -2019,31 +2032,229 @@ class SecurityGUI:
             self.root.after(0, self._append_mon, "── ip addr ──\n" + out, ok)
         threading.Thread(target=_get, daemon=True).start()
 
+    # ---- Helper : taille lisible (o / Ko / Mo / Go / To) ----
+    def _human_size(self, num_bytes):
+        size = float(num_bytes)
+        for unit in ["o", "Ko", "Mo", "Go", "To"]:
+            if abs(size) < 1024.0:
+                return f"{size:.0f} {unit}" if unit == "o" else f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} Po"
+
+    # =========================================================================
+    #  Analyse d'espace disque (façon ncdu) — Top N dossiers les plus volumineux
+    # =========================================================================
+    def _mon_disk_analyze(self):
+        self._append_mon(
+            f"Analyse de l'espace disque en cours (du -x -d {DISK_ANALYZE_DEPTH} "
+            f"{DISK_ANALYZE_ROOT})...\nCela peut prendre du temps selon la taille du disque.",
+            True
+        )
+
+        def _scan():
+            shell_cmd = (
+                f"du -x -d {DISK_ANALYZE_DEPTH} {DISK_ANALYZE_ROOT} 2>/dev/null "
+                f"| sort -rn | head -n {DISK_ANALYZE_TOP_N}"
+            )
+            result = subprocess.run(["sudo", "sh", "-c", shell_cmd],
+                                     capture_output=True, text=True)
+            ok = result.returncode == 0
+
+            entries = []
+            for line in result.stdout.splitlines():
+                parts = line.split("\t", 1)
+                if len(parts) != 2:
+                    continue
+                try:
+                    size_kb = int(parts[0])
+                except ValueError:
+                    continue
+                entries.append((size_kb, parts[1]))
+
+            if not entries:
+                self.root.after(0, self._append_mon,
+                    "Aucun résultat exploitable (droits insuffisants ou 'du' indisponible).",
+                    False)
+                return
+
+            body = [f"── Top {len(entries)} dossiers les plus volumineux "
+                    f"(sous {DISK_ANALYZE_ROOT}, profondeur {DISK_ANALYZE_DEPTH}, "
+                    f"même système de fichiers) ──"]
+            for size_kb, path in entries:
+                body.append(f"{self._human_size(size_kb * 1024):>10}   {path}")
+            body.append("")
+            body.append("💡 Pour explorer interactivement : sudo ncdu -x " + DISK_ANALYZE_ROOT)
+            self.root.after(0, self._append_mon, "\n".join(body), ok)
+
+        threading.Thread(target=_scan, daemon=True).start()
+
+    # =========================================================================
+    #  Nettoyage système — sélection des éléments, aperçu, bilan avant/après
+    # =========================================================================
     def _mon_clean(self):
-        if not messagebox.askyesno(
-            "Nettoyer fichiers inutiles",
-            "Lancer le nettoyage ?\n\n"
-            "• apt autoremove --purge\n• apt autoclean\n• apt clean\n"
-            "• Suppression /tmp/* et /var/tmp/*"
-        ):
-            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Nettoyer le système")
+        dialog.resizable(False, False)
+
+        ttk.Label(dialog, text="Sélectionnez les éléments à nettoyer :",
+                  font=("TkDefaultFont", 10, "bold")
+                  ).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
+
+        self._clean_apt_var      = tk.BooleanVar(value=True)
+        self._clean_tmp_var      = tk.BooleanVar(value=True)
+        self._clean_journal_var  = tk.BooleanVar(value=False)
+        self._clean_pipcache_var = tk.BooleanVar(value=False)
+        self._clean_thumbs_var   = tk.BooleanVar(value=False)
+        self._clean_docker_var   = tk.BooleanVar(value=False)
+        docker_present = shutil.which("docker") is not None
+
+        ttk.Checkbutton(dialog, text="Paquets APT obsolètes (autoremove --purge, autoclean, clean)",
+                         variable=self._clean_apt_var
+                         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=14, pady=2)
+        ttk.Checkbutton(dialog, text="Fichiers temporaires (/tmp, /var/tmp)",
+                         variable=self._clean_tmp_var
+                         ).grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=2)
+
+        row_journal = ttk.Frame(dialog)
+        row_journal.grid(row=3, column=0, columnspan=2, sticky="w", padx=14, pady=2)
+        ttk.Checkbutton(row_journal, text="Journaux systemd — conserver les",
+                         variable=self._clean_journal_var).pack(side="left")
+        self._clean_journal_days = tk.StringVar(value="7")
+        ttk.Entry(row_journal, textvariable=self._clean_journal_days, width=4
+                   ).pack(side="left", padx=4)
+        ttk.Label(row_journal, text="derniers jours").pack(side="left")
+
+        ttk.Checkbutton(dialog, text="Cache pip (~/.cache/pip)",
+                         variable=self._clean_pipcache_var
+                         ).grid(row=4, column=0, columnspan=2, sticky="w", padx=14, pady=2)
+        ttk.Checkbutton(dialog, text="Cache miniatures (~/.cache/thumbnails)",
+                         variable=self._clean_thumbs_var
+                         ).grid(row=5, column=0, columnspan=2, sticky="w", padx=14, pady=2)
+        next_row = 6
+        if docker_present:
+            ttk.Checkbutton(dialog,
+                text="Docker : images/conteneurs/volumes inutilisés (system prune)",
+                variable=self._clean_docker_var
+                ).grid(row=next_row, column=0, columnspan=2, sticky="w", padx=14, pady=2)
+            next_row += 1
+
+        preview = scrolledtext.ScrolledText(dialog, width=78, height=8, font=("Courier", 8))
+        preview.grid(row=next_row, column=0, columnspan=2, padx=14, pady=(8, 6))
+        preview.insert(tk.END, "⏳ Analyse en cours, merci de patienter...")
+        preview.configure(state="disabled")
+        next_row += 1
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.grid(row=next_row, column=0, columnspan=2, pady=12)
+        btn_launch = ttk.Button(btn_frame, text="🗑 Lancer le nettoyage",
+                                 style="Danger.TButton", state="disabled")
+        btn_launch.pack(side="left", padx=8)
+        ttk.Button(btn_frame, text="Annuler", command=dialog.destroy).pack(side="left", padx=8)
+
+        def _set_preview(text):
+            preview.configure(state="normal")
+            preview.delete(1.0, tk.END)
+            preview.insert(tk.END, text)
+            preview.configure(state="disabled")
+            btn_launch.configure(state="normal")
+
+        def _load_preview():
+            apt_res = subprocess.run(["apt-get", "--dry-run", "autoremove"],
+                                      capture_output=True, text=True)
+            journal_res = subprocess.run(["journalctl", "--disk-usage"],
+                                          capture_output=True, text=True)
+            apt_out = (apt_res.stdout + apt_res.stderr)
+            noise_keywords = [
+                "note :", "note:", "simulation", "superutilisateur",
+                "privilège", "privilege", "verrouillage", "locking is",
+                "lock is not held", "réalité", "reality", "représentative",
+                "vraiment fonctionner", "real execution", "uninteresting",
+            ]
+            apt_lines = [
+                line for line in apt_out.splitlines()
+                if not any(kw in line.lower() for kw in noise_keywords)
+            ]
+            apt_out = "\n".join(apt_lines).strip()
+
+            text = "── apt-get --dry-run autoremove ──\n"
+            text += apt_out or "(aucune sortie)"
+            text += "\n\n── journalctl --disk-usage ──\n"
+            text += (journal_res.stdout + journal_res.stderr).strip() or "(indisponible)"
+            self.root.after(0, _set_preview, text)
+
+        threading.Thread(target=_load_preview, daemon=True).start()
+
+        def _launch():
+            if not messagebox.askyesno(
+                "Confirmation",
+                "Lancer le nettoyage avec les éléments cochés ?\n"
+                "Cette action est irréversible."
+            ):
+                return
+            selection = {
+                "apt": self._clean_apt_var.get(),
+                "tmp": self._clean_tmp_var.get(),
+                "journal": self._clean_journal_var.get(),
+                "journal_days": self._clean_journal_days.get().strip() or "7",
+                "pip": self._clean_pipcache_var.get(),
+                "thumbs": self._clean_thumbs_var.get(),
+                "docker": self._clean_docker_var.get(),
+            }
+            dialog.destroy()
+            self._mon_clean_run(selection)
+
+        btn_launch.configure(command=_launch)
+
+    def _mon_clean_run(self, selection):
         self._append_mon("Nettoyage du système en cours...", True)
+        pip_cache_dir  = Path.home() / ".cache" / "pip"
+        thumbs_dir     = Path.home() / ".cache" / "thumbnails"
 
         def _clean():
-            cmds = [
-                (["sudo", "apt", "autoremove", "--purge", "-y"], "apt autoremove --purge"),
-                (["sudo", "apt", "autoclean"],                    "apt autoclean"),
-                (["sudo", "apt", "clean"],                        "apt clean"),
-                (["sudo", "sh", "-c", "rm -rf /tmp/*"],           "rm /tmp/*"),
-                (["sudo", "sh", "-c", "rm -rf /var/tmp/*"],       "rm /var/tmp/*"),
-            ]
+            usage_before = shutil.disk_usage("/")
+            cmds = []
+
+            if selection["apt"]:
+                cmds += [
+                    (["sudo", "apt", "autoremove", "--purge", "-y"], "apt autoremove --purge"),
+                    (["sudo", "apt", "autoclean"],                    "apt autoclean"),
+                    (["sudo", "apt", "clean"],                        "apt clean"),
+                ]
+            if selection["tmp"]:
+                cmds += [
+                    (["sudo", "sh", "-c", "rm -rf /tmp/*"],     "rm /tmp/*"),
+                    (["sudo", "sh", "-c", "rm -rf /var/tmp/*"], "rm /var/tmp/*"),
+                ]
+            if selection["journal"]:
+                days = selection["journal_days"]
+                cmds.append((["sudo", "journalctl", f"--vacuum-time={days}d"],
+                              f"journalctl --vacuum-time={days}d"))
+            if selection["pip"]:
+                cmds.append((["rm", "-rf", str(pip_cache_dir)], "purge cache pip"))
+            if selection["thumbs"]:
+                cmds.append((["rm", "-rf", str(thumbs_dir)], "purge cache miniatures"))
+            if selection["docker"]:
+                cmds.append((["sudo", "docker", "system", "prune", "-f"],
+                              "docker system prune"))
+
             results = []
             for cmd, label in cmds:
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 out    = (result.stdout + result.stderr).strip()
                 ok     = result.returncode == 0
                 results.append(f"{'✅' if ok else '❌'} {label}\n{out}")
-            self.root.after(0, self._append_mon, "\n\n".join(results), True)
+
+            usage_after = shutil.disk_usage("/")
+            freed = usage_after.free - usage_before.free
+
+            summary = (
+                f"💾 Espace disque libéré : {self._human_size(max(freed, 0))}\n"
+                f"   Avant : {self._human_size(usage_before.free)} libres  →  "
+                f"Après : {self._human_size(usage_after.free)} libres"
+            )
+            report = summary + "\n\n" + "\n\n".join(results) if results else summary + \
+                "\n\n(aucun élément sélectionné)"
+            self.root.after(0, self._append_mon, report, True)
 
         threading.Thread(target=_clean, daemon=True).start()
 
