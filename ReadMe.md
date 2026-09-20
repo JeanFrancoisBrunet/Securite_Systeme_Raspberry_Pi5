@@ -11,15 +11,16 @@ Console de sécurité Tkinter centralisant, pour un Raspberry Pi 5, le pilotage 
 
 ### 🛡 Anti-Intrusion — Fail2Ban
 - Démarrage / arrêt du service, avec **création automatique** de `/etc/fail2ban/jail.local` si absent (jail `sshd`, backend `systemd` adapté à Raspberry Pi OS Bullseye/Bookworm).
-- Consultation du statut de la jail `sshd` (IP actuellement bannies).
+- Consultation du statut de la jail `sshd` : résumé du nombre d'IP actuellement bannies, avec détail complet en dessous.
+- Vérification rapide de l'état du service (actif/inactif).
 - **Débannissement d'IP** via une boîte de dialogue proposant directement la liste des IP bannies.
 
 ### 🔥 Pare-Feu — UFW
-- Gestion du pare-feu UFW (activation, règles, statut) depuis un onglet dédié.
+- Gestion du pare-feu UFW (activation, règles, statut) depuis un onglet dédié, avec résumé (actif/inactif, nombre de règles) suivi du détail complet.
 
 ### 📡 Surveillance Réseau — WireShark
-- **Capture réseau** de 10 secondes sur l'interface active (détectée automatiquement via `ip route`), avec résumé des conversations IP (`tshark -z conv,ip`).
-- **Découverte des appareils connectés** sur le réseau local (`arp-scan`, ou repli sur `arp -a` si absent).
+- **Capture réseau** de 10 secondes sur l'interface active (détectée automatiquement via `ip route`), avec un résumé (nombre de connexions détectées) suivi du détail complet des conversations IP (`tshark -z conv,ip`).
+- **Découverte des appareils connectés** sur le réseau local (`arp-scan`, ou repli sur `arp -a` si absent), avec décompte du nombre d'appareils détectés.
 - **Détection d'intrusions basique** : connexions établies, ports en écoute, 20 derniers événements du service SSH.
 - Lancement de l'interface graphique **Wireshark** en tant qu'utilisateur normal (avertissement contre l'exécution en root).
 
@@ -96,4 +97,4 @@ Protection_PI5/
 - `python3-tk`
 
 ## Auteur
-Jean-François BRUNET - JFBConseils - Juillet 2026
+Jean-François BRUNET - JFBConseils - Juillet/Septembre 2026

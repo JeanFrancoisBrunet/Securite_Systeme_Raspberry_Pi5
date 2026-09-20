@@ -595,7 +595,10 @@ class SecurityGUI:
         self.lbl_clam_pct.config(text=" 100%")
         self.lbl_clam_current.config(text="Terminé.")
         if not self.show_ok_var.get() and not self.infected_only_var.get():
-            text = "\n".join(l for l in text.splitlines() if not l.endswith(": OK"))
+            text = "\n".join(
+                l for l in text.splitlines()
+                if not l.endswith(": OK") and "LibClamAV Warning" not in l
+            )
         self.txt_clamav.delete(1.0, tk.END)
         self.txt_clamav.insert(tk.END, text)
         self.btn_clam_stop.pack_forget()
@@ -703,8 +706,9 @@ class SecurityGUI:
         self._copy_text_widget(self.txt_fail2ban)
 
     def _check_fail2ban_service(self):
-        out, ok = self._run_sudo(["systemctl", "status", "fail2ban"])
-        self._append_f2b(out, ok)
+        out, ok = self._run_sudo(["systemctl", "is-active", "fail2ban"])
+        state = out.strip() if out.strip() else "inconnu"
+        self._append_f2b(f"Statut du service Fail2Ban : {state}", ok and state == "active")
 
     def _ensure_jail_local(self):
         jail_local = "/etc/fail2ban/jail.local"
@@ -755,7 +759,17 @@ class SecurityGUI:
                 "Utilisez '▶ Démarrer Fail2Ban' puis réessayez.", False)
             return
         out, ok = self._run_sudo(["fail2ban-client", "status", "sshd"])
-        self._append_f2b(out, ok)
+        if ok:
+            banned_ips = []
+            for line in out.splitlines():
+                if "Banned IP list:" in line:
+                    ips = line.split("Banned IP list:")[-1].strip()
+                    banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
+            summary = (f"IP bannies ({len(banned_ips)}) : {', '.join(banned_ips)}"
+                       if banned_ips else "Aucune IP bannie actuellement.")
+            self._append_f2b(f"{summary}\n\n── Détail complet ──\n{out}", True)
+        else:
+            self._append_f2b(out, ok)
 
     def _unban_ip(self):
         banned_ips = []
@@ -866,7 +880,12 @@ class SecurityGUI:
         if not ok and "not found" in out.lower():
             self._append_ufw("UFW n'est pas installé.\nInstallez-le : sudo apt install ufw", False)
         else:
-            self._append_ufw(out, ok)
+            active = "Actif" if "Status: active" in out else "Inactif"
+            nb_rules = sum(1 for l in out.splitlines()
+                           if l.strip() and not l.startswith(("Status", "Logging", "Default",
+                                                               "New profiles", "To", "--")))
+            summary = f"Statut UFW : {active}  ·  {nb_rules} règle(s) active(s)"
+            self._append_ufw(f"{summary}\n\n── Détail complet ──\n{out}", ok)
 
     def _ufw_enable(self):
         if not messagebox.askyesno("Activer UFW", "Activer le pare-feu UFW ?"):
@@ -982,7 +1001,9 @@ class SecurityGUI:
                 capture_output=True, text=True
             )
             out = (result.stdout + result.stderr).strip() or "Aucun résultat."
-            self.root.after(0, self._append_ws, out, True)
+            nb_conv = sum(1 for l in out.splitlines() if "<->" in l)
+            summary = f"Capture terminée : {nb_conv} connexion(s) IP détectée(s) en 10 sec."
+            self.root.after(0, self._append_ws, f"{summary}\n\n── Détail complet ──\n{out}", True)
 
         threading.Thread(target=_capture, daemon=True).start()
 
@@ -1002,7 +1023,10 @@ class SecurityGUI:
                 out = ("arp-scan non installé — résultats via arp -a :\n"
                        "(Pour plus de détails : sudo apt install arp-scan)\n\n"
                        + result.stdout)
-            self.root.after(0, self._append_ws, out.strip(), True)
+            nb_dev = sum(1 for l in out.splitlines() if re.search(r"\d+\.\d+\.\d+\.\d+", l))
+            summary = f"Appareils détectés : {nb_dev}"
+            self.root.after(0, self._append_ws,
+                             f"{summary}\n\n── Détail complet ──\n{out.strip()}", True)
 
         threading.Thread(target=_scan, daemon=True).start()
 
@@ -1403,7 +1427,7 @@ class SecurityGUI:
 
         def _run():
             cmd = ["hydra", "-l", user, "-P", wlist, "-t", tasks,
-                   "-V", "-o", "/tmp/hydra_result.txt", f"ssh://{target}"]
+                   "-o", "/tmp/hydra_result.txt", f"ssh://{target}"]
             try:
                 self._hydra_process = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -1787,7 +1811,8 @@ class SecurityGUI:
                 counts[tag if tag in counts else "warn"] += 1
                 results.append((pw, verdict, tag))
                 pct = int((i + 1) / total * 100) if total > 0 else 0
-                self.root.after(0, self._passwd_wl_progress, i + 1, total, pct)
+                if (i + 1) % 10 == 0 or (i + 1) == total:
+                    self.root.after(0, self._passwd_wl_progress, i + 1, total, pct)
             self.root.after(0, self._passwd_wl_done_detail, results, counts)
 
         self._wl_thread = threading.Thread(target=_run, daemon=True)
