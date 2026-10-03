@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+ 
+*.log
+*.lock
+ 
+.msal_token_cache.json
+.secrets.env
+.env
+*.env
+ .groq_config
+history.json.lock
