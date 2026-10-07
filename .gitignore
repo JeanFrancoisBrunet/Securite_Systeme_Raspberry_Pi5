@@ -3,28 +3,22 @@ __pycache__/
 *.env
 *.log
 *.lock
-
 *.zip
 *.pt
 *.onnx
 
+# Clés et jetons
 .groq_config
 .msal_token_cache.json
 .secrets.env
 
-Scan_emails/.msal_token_cache.json
-Scan_emails/.secrets.env 
-
-.myagent/events.log
-.myagent/history.json
-.myagent/token_usage.json
-.myagent/vectors.json
-
-.myagent/*.bak*
-
+# Données personnelles de l'agent : tout .myagent est ignoré
+# (mémoire, historique, conversations archivées, fichiers de travail, skills, config)
+.myagent/*
 history.json
 history.json.lock
 
-Recherche_immo/*.log
-Scan_emails/*.log
-Timekeeping/*.log
+# Sous-projets versionnés séparément
+Recherche_immo/
+Scan_emails/
+Timekeeping/
