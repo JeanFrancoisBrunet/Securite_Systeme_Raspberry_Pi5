@@ -608,7 +608,7 @@ class SecurityGUI:
         if not messagebox.askyesno(
             "Mise à jour base virale",
             "Màj : base de données ClamAV ?\n"
-            "      (Arrêt & Redémarrage :\n         clamav-freshclam)"
+            "      Arrêt & Redémarrage :\n         clamav-freshclam"
         ):
             return
         ts = datetime.now().strftime("%H:%M:%S")
